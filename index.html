@@ -8021,18 +8021,18 @@ const CloudSync = (function(){
   const cloudRows = new Map();
 
   const specs = {
-    settings: {table:'app_settings', pk:'id', kind:'settings', fields:[['libName','lib_name'],['address','address'],['finePerDay','fine_per_day'],['logo','logo'],['autoBackup','auto_backup'],['theme','theme'],['customCategories','custom_categories'],['darkMode','dark_mode'],['backupTime','backup_time'],['backupFolderName','backup_folder_name'],['cardTheme','card_theme'],['cardFontSize','card_font_size'],['cardOrientation','card_orientation'],['lateFeeDueDay','late_fee_due_day'],['lateFeePerDay','late_fee_per_day'],['lateFeeEnabled','late_fee_enabled']]},
-    users: {table:'app_users', pk:'id', fields:[['name','name'],['role','role'],['pass','password'],['active','active'],['permissions','permissions']]},
-    books: {table:'books', pk:'id', fields:[['title','title'],['author','author'],['accession','accession'],['barcode','barcode'],['spinning','spinning'],['shelf','shelf'],['row','row_number'],['category','category'],['copies','copies'],['issued','issued'],['addedDate','added_date'],['needsBinding','needs_binding'],['bindingNote','binding_note']]},
-    members: {table:'members', pk:'id', fields:[['name','name'],['father','father'],['cnic','cnic'],['mobile','mobile'],['fee','fee'],['address','address'],['joinDate','join_date'],['photo','photo'],['status','status'],['deactivatedDate','deactivated_date'],['feeNextDue','fee_next_due'],['lateFeeWaived','late_fee_waived'],['reactivatedDate','reactivated_date'],['deactivatedReason','deactivated_reason']]},
-    issues: {table:'issues', pk:'id', fields:[['memberId','member_id'],['bookId','book_id'],['issueDate','issue_date'],['dueDate','due_date'],['status','status'],['returnDate','return_date'],['fine','fine'],['issuedBy','issued_by'],['issuedById','issued_by_id'],['receivedBy','received_by'],['receivedById','received_by_id']]},
-    fees: {table:'fees', pk:'id', fields:[['memberId','member_id'],['month','month'],['amount','amount'],['method','method'],['date','date'],['receivedBy','received_by'],['receivedById','received_by_id'],['returned','returned'],['returnedBy','returned_by'],['returnedDate','returned_date'],['returnReason','return_reason']]},
-    attendance: {table:'member_attendance', pk:'id', kind:'attendance'},
-    userAtt: {table:'staff_attendance', pk:'id', kind:'userAtt'},
-    actlog: {table:'activity_logs', pk:'position', kind:'actlog', fields:[['ts','ts'],['user','username'],['userId','user_id'],['role','role'],['action','action'],['details','details']]},
-    expenses: {table:'expenses', pk:'id', kind:'array', fields:[['desc','description'],['amount','amount'],['category','category'],['date','date'],['method','method'],['addedBy','added_by']]},
-    memberNotes: {table:'member_notes', pk:'id', kind:'array', fields:[['text','note_text'],['createdAt','created_at'],['createdBy','created_by'],['expireDate','expire_date'],['editedAt','edited_at']]},
-    holidays: {table:'holidays', pk:'holiday_date', kind:'holidays'}
+    settings: {table:'library_app_settings', pk:'id', kind:'settings', fields:[['libName','lib_name'],['address','address'],['finePerDay','fine_per_day'],['logo','logo'],['autoBackup','auto_backup'],['theme','theme'],['customCategories','custom_categories'],['darkMode','dark_mode'],['backupTime','backup_time'],['backupFolderName','backup_folder_name'],['cardTheme','card_theme'],['cardFontSize','card_font_size'],['cardOrientation','card_orientation'],['lateFeeDueDay','late_fee_due_day'],['lateFeePerDay','late_fee_per_day'],['lateFeeEnabled','late_fee_enabled']]},
+    users: {table:'library_app_users', pk:'id', fields:[['name','name'],['role','role'],['pass','password'],['active','active'],['permissions','permissions']]},
+    books: {table:'library_books', pk:'id', fields:[['title','title'],['author','author'],['accession','accession'],['barcode','barcode'],['spinning','spinning'],['shelf','shelf'],['row','row_number'],['category','category'],['copies','copies'],['issued','issued'],['addedDate','added_date'],['needsBinding','needs_binding'],['bindingNote','binding_note']]},
+    members: {table:'library_members', pk:'id', fields:[['name','name'],['father','father'],['cnic','cnic'],['mobile','mobile'],['fee','fee'],['address','address'],['joinDate','join_date'],['photo','photo'],['status','status'],['deactivatedDate','deactivated_date'],['feeNextDue','fee_next_due'],['lateFeeWaived','late_fee_waived'],['reactivatedDate','reactivated_date'],['deactivatedReason','deactivated_reason']]},
+    issues: {table:'library_issues', pk:'id', fields:[['memberId','member_id'],['bookId','book_id'],['issueDate','issue_date'],['dueDate','due_date'],['status','status'],['returnDate','return_date'],['fine','fine'],['issuedBy','issued_by'],['issuedById','issued_by_id'],['receivedBy','received_by'],['receivedById','received_by_id']]},
+    fees: {table:'library_fees', pk:'id', fields:[['memberId','member_id'],['month','month'],['amount','amount'],['method','method'],['date','date'],['receivedBy','received_by'],['receivedById','received_by_id'],['returned','returned'],['returnedBy','returned_by'],['returnedDate','returned_date'],['returnReason','return_reason']]},
+    attendance: {table:'library_member_attendance', pk:'id', kind:'attendance'},
+    userAtt: {table:'library_staff_attendance', pk:'id', kind:'userAtt'},
+    actlog: {table:'library_activity_logs', pk:'position', kind:'actlog', fields:[['ts','ts'],['user','username'],['userId','user_id'],['role','role'],['action','action'],['details','details']]},
+    expenses: {table:'library_expenses', pk:'id', kind:'array', fields:[['desc','description'],['amount','amount'],['category','category'],['date','date'],['method','method'],['addedBy','added_by']]},
+    memberNotes: {table:'library_member_notes', pk:'id', kind:'array', fields:[['text','note_text'],['createdAt','created_at'],['createdBy','created_by'],['expireDate','expire_date'],['editedAt','edited_at']]},
+    holidays: {table:'library_holidays', pk:'holiday_date', kind:'holidays'}
   };
 
   function headers(){
@@ -8121,7 +8121,7 @@ const CloudSync = (function(){
     const entries=Object.entries(specs);
     const loaded=await Promise.all(entries.map(async ([key,spec])=>[key,spec,await fetchTable(spec)]));
     loaded.forEach(([key,spec,rows])=>{cloudRows.set(key,rows);snapshot[key]=fromRows(key,rows);});
-    const meta=await fetchTable({table:'app_meta',pk:'key'});
+    const meta=await fetchTable({table:'library_app_meta',pk:'key'});
     cloudRows.set('__meta',meta);
     meta.forEach(row=>{snapshot[row.key]=row.value;});
     if(!snapshot.settings||!snapshot.users)throw new Error('Relational tables have no settings or users data; run supabase-relational-migration.sql first');
@@ -8131,7 +8131,7 @@ const CloudSync = (function(){
   function rowId(spec,row){return String(row[spec.pk]);}
 
   async function saveRows(key,value){
-    const spec=specs[key]||{table:'app_meta',pk:'key'};
+    const spec=specs[key]||{table:'library_app_meta',pk:'key'};
     const stateKey=specs[key]?key:'__meta';
     const oldRows=cloudRows.get(stateKey)||[];
     const nextRows=specs[key]?toRows(key,value):[...oldRows.filter(row=>row.key!==key),{key,value}];
