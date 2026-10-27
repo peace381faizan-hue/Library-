@@ -329,9 +329,9 @@ declare
   sync_secret text := 'REPLACE_WITH_A_LONG_RANDOM_SYNC_CODE';
 begin
   foreach target_table in array array[
-    'app_settings', 'app_users', 'books', 'members', 'issues', 'fees',
-    'member_attendance', 'staff_attendance', 'activity_logs', 'expenses',
-    'member_notes', 'holidays', 'app_meta'
+    'library_app_settings', 'library_app_users', 'library_books', 'library_members', 'library_issues', 'library_fees',
+    'library_member_attendance', 'library_staff_attendance', 'library_activity_logs', 'library_expenses',
+    'library_member_notes', 'library_holidays', 'library_app_meta'
   ] loop
     execute format('alter table public.%I enable row level security', target_table);
     execute format('drop policy if exists app_sync on public.%I', target_table);
