@@ -8009,87 +8009,193 @@ function getDDCDescription(ddc){
   }
 })();
 
-// ── Supabase is authoritative; SQLite is only a local working cache ────────────
+// ── Supabase relational storage; SQLite is a refreshed local cache ────────────
 const CloudSync = (function(){
   const config = window.CLOUD || {};
-  const tableUrl = () => config.url.replace(/\/$/, '') + '/rest/v1/kv';
+  const baseUrl = () => config.url.replace(/\/$/, '') + '/rest/v1/';
   const rawSet = DB.set.bind(DB);
   let syncCode = '';
   let ready = false;
   let queue = new Map();
   let timer = null;
+  const cloudRows = new Map();
+
+  const specs = {
+    settings: {table:'app_settings', pk:'id', kind:'settings', fields:[['libName','lib_name'],['address','address'],['finePerDay','fine_per_day'],['logo','logo'],['autoBackup','auto_backup'],['theme','theme'],['customCategories','custom_categories'],['darkMode','dark_mode'],['backupTime','backup_time'],['backupFolderName','backup_folder_name'],['cardTheme','card_theme'],['cardFontSize','card_font_size'],['cardOrientation','card_orientation'],['lateFeeDueDay','late_fee_due_day'],['lateFeePerDay','late_fee_per_day'],['lateFeeEnabled','late_fee_enabled']]},
+    users: {table:'app_users', pk:'id', fields:[['name','name'],['role','role'],['pass','password'],['active','active'],['permissions','permissions']]},
+    books: {table:'books', pk:'id', fields:[['title','title'],['author','author'],['accession','accession'],['barcode','barcode'],['spinning','spinning'],['shelf','shelf'],['row','row_number'],['category','category'],['copies','copies'],['issued','issued'],['addedDate','added_date'],['needsBinding','needs_binding'],['bindingNote','binding_note']]},
+    members: {table:'members', pk:'id', fields:[['name','name'],['father','father'],['cnic','cnic'],['mobile','mobile'],['fee','fee'],['address','address'],['joinDate','join_date'],['photo','photo'],['status','status'],['deactivatedDate','deactivated_date'],['feeNextDue','fee_next_due'],['lateFeeWaived','late_fee_waived'],['reactivatedDate','reactivated_date'],['deactivatedReason','deactivated_reason']]},
+    issues: {table:'issues', pk:'id', fields:[['memberId','member_id'],['bookId','book_id'],['issueDate','issue_date'],['dueDate','due_date'],['status','status'],['returnDate','return_date'],['fine','fine'],['issuedBy','issued_by'],['issuedById','issued_by_id'],['receivedBy','received_by'],['receivedById','received_by_id']]},
+    fees: {table:'fees', pk:'id', fields:[['memberId','member_id'],['month','month'],['amount','amount'],['method','method'],['date','date'],['receivedBy','received_by'],['receivedById','received_by_id'],['returned','returned'],['returnedBy','returned_by'],['returnedDate','returned_date'],['returnReason','return_reason']]},
+    attendance: {table:'member_attendance', pk:'id', kind:'attendance'},
+    userAtt: {table:'staff_attendance', pk:'id', kind:'userAtt'},
+    actlog: {table:'activity_logs', pk:'position', kind:'actlog', fields:[['ts','ts'],['user','username'],['userId','user_id'],['role','role'],['action','action'],['details','details']]},
+    expenses: {table:'expenses', pk:'id', kind:'array', fields:[['desc','description'],['amount','amount'],['category','category'],['date','date'],['method','method'],['addedBy','added_by']]},
+    memberNotes: {table:'member_notes', pk:'id', kind:'array', fields:[['text','note_text'],['createdAt','created_at'],['createdBy','created_by'],['expireDate','expire_date'],['editedAt','edited_at']]},
+    holidays: {table:'holidays', pk:'holiday_date', kind:'holidays'}
+  };
 
   function headers(){
-    return {
-      apikey: config.key,
-      Authorization: 'Bearer ' + config.key,
-      'Content-Type': 'application/json',
-      'x-sync-code': syncCode
-    };
+    return {apikey:config.key,Authorization:'Bearer '+config.key,'Content-Type':'application/json','x-sync-code':syncCode};
   }
 
-  async function loadCloudRows(){
-    const response = await fetch(tableUrl() + '?select=key,value,updated_at', {headers: headers()});
-    if(!response.ok) throw new Error('Supabase read failed (HTTP ' + response.status + ')');
-    return response.json();
+  function toRecordRow(spec,id,record){
+    const row={[spec.pk]:id,extra:{}};
+    const known=new Set(['id',...spec.fields.map(([modelKey])=>modelKey)]);
+    spec.fields.forEach(([modelKey,column])=>{row[column]=record[modelKey]===undefined?null:record[modelKey];});
+    Object.entries(record||{}).forEach(([key,value])=>{if(!known.has(key))row.extra[key]=value;});
+    return row;
   }
 
-  async function pushRows(rows){
-    const body = rows.map(([key,value]) => ({key, value, updated_at: new Date().toISOString()}));
-    const response = await fetch(tableUrl() + '?on_conflict=key', {
-      method: 'POST',
-      headers: {...headers(), Prefer: 'resolution=merge-duplicates,return=minimal'},
-      body: JSON.stringify(body)
+  function toRows(key,value){
+    const spec=specs[key];
+    if(!spec){return [{key,value}];}
+    if(spec.kind==='settings') return [toRecordRow(spec,1,value||{})];
+    if(spec.kind==='attendance'||spec.kind==='userAtt'){
+      const rows=[];
+      Object.entries(value||{}).forEach(([date,records])=>Object.entries(records||{}).forEach(([recordId,record])=>{
+        const rowId=date+'::'+recordId;
+        if(spec.kind==='attendance'){
+          const item=record&&typeof record==='object'?record:{};
+          rows.push({id:rowId,attendance_date:date,member_id:recordId,check_in:item.checkIn||null,check_out:item.checkOut||null,extra:Object.fromEntries(Object.entries(item).filter(([field])=>!['checkIn','checkOut'].includes(field)))});
+        }else{
+          rows.push({...toRecordRow({pk:'id',fields:[['name','name'],['role','role'],['checkIn','check_in'],['checkInTs','check_in_ts'],['checkOut','check_out'],['checkOutTs','check_out_ts']]},rowId,record||{}),attendance_date:date,user_id:recordId});
+        }
+      }));
+      return rows;
+    }
+    if(spec.kind==='holidays') return Object.entries(value||{}).map(([date,isHoliday])=>({holiday_date:date,is_holiday:!!isHoliday}));
+    const records=Array.isArray(value)?value.map((record,index)=>[String(index),record,index]):Object.entries(value||{}).map(([id,record])=>[id,record]);
+    return records.map(([id,record,index])=>{
+      const row=toRecordRow(spec,spec.kind==='actlog'?index:(record?.id||id),record||{});
+      if(spec.kind==='array')row.position=index;
+      return row;
     });
-    if(!response.ok) throw new Error('Supabase write failed (HTTP ' + response.status + ')');
+  }
+
+  function fromRecordRow(spec,row){
+    const record={...(row.extra||{})};
+    spec.fields.forEach(([modelKey,column])=>{if(row[column]!==null&&row[column]!==undefined)record[modelKey]=row[column];});
+    if(spec.kind!=='settings') record.id=row.id;
+    return record;
+  }
+
+  function fromRows(key,rows){
+    const spec=specs[key];
+    if(!spec) return rows[0]?.value;
+    if(spec.kind==='settings') return rows.length?fromRecordRow(spec,rows[0]):null;
+    if(spec.kind==='attendance'||spec.kind==='userAtt'){
+      const result={};
+      rows.forEach(row=>{
+        if(!result[row.attendance_date])result[row.attendance_date]={};
+        if(spec.kind==='attendance') result[row.attendance_date][row.member_id]={...(row.extra||{}),...(row.check_in?{checkIn:row.check_in}:{}),...(row.check_out?{checkOut:row.check_out}:{})};
+        else result[row.attendance_date][row.user_id]=fromRecordRow({pk:'id',fields:[['name','name'],['role','role'],['checkIn','check_in'],['checkInTs','check_in_ts'],['checkOut','check_out'],['checkOutTs','check_out_ts']]},row);
+      });
+      return result;
+    }
+    if(spec.kind==='holidays') return Object.fromEntries(rows.map(row=>[row.holiday_date,row.is_holiday]));
+    if(spec.kind==='array') return rows.sort((a,b)=>a.position-b.position).map(row=>fromRecordRow(spec,row));
+    if(spec.kind==='actlog') return rows.sort((a,b)=>a.position-b.position).map(row=>fromRecordRow(spec,row));
+    return Object.fromEntries(rows.map(row=>[row.id,fromRecordRow(spec,row)]));
+  }
+
+  async function fetchTable(spec){
+    const rows=[];
+    for(let offset=0;;offset+=1000){
+      const url=new URL(baseUrl()+spec.table);
+      url.searchParams.set('select','*');
+      url.searchParams.set('order',spec.pk+'.asc');
+      url.searchParams.set('limit','1000');
+      url.searchParams.set('offset',String(offset));
+      const response=await fetch(url.toString(),{headers:headers()});
+      if(!response.ok)throw new Error('Supabase read failed for '+spec.table+' (HTTP '+response.status+')');
+      const batch=await response.json();
+      rows.push(...batch);
+      if(batch.length<1000)break;
+    }
+    return rows;
+  }
+
+  async function loadCloudSnapshot(){
+    const snapshot={};
+    const entries=Object.entries(specs);
+    const loaded=await Promise.all(entries.map(async ([key,spec])=>[key,spec,await fetchTable(spec)]));
+    loaded.forEach(([key,spec,rows])=>{cloudRows.set(key,rows);snapshot[key]=fromRows(key,rows);});
+    const meta=await fetchTable({table:'app_meta',pk:'key'});
+    cloudRows.set('__meta',meta);
+    meta.forEach(row=>{snapshot[row.key]=row.value;});
+    if(!snapshot.settings||!snapshot.users)throw new Error('Relational tables have no settings or users data; run supabase-relational-migration.sql first');
+    return snapshot;
+  }
+
+  function rowId(spec,row){return String(row[spec.pk]);}
+
+  async function saveRows(key,value){
+    const spec=specs[key]||{table:'app_meta',pk:'key'};
+    const stateKey=specs[key]?key:'__meta';
+    const oldRows=cloudRows.get(stateKey)||[];
+    const nextRows=specs[key]?toRows(key,value):[...oldRows.filter(row=>row.key!==key),{key,value}];
+    const oldMap=new Map(oldRows.map(row=>[rowId(spec,row),row]));
+    const nextMap=new Map(nextRows.map(row=>[rowId(spec,row),row]));
+    const changed=nextRows.filter(row=>JSON.stringify(oldMap.get(rowId(spec,row)))!==JSON.stringify(row));
+    const removed=[...oldMap.keys()].filter(id=>!nextMap.has(id));
+    if(changed.length){
+      const response=await fetch(baseUrl()+spec.table+'?on_conflict='+encodeURIComponent(spec.pk),{method:'POST',headers:{...headers(),Prefer:'resolution=merge-duplicates,return=minimal'},body:JSON.stringify(changed)});
+      if(!response.ok)throw new Error('Supabase write failed for '+spec.table+' (HTTP '+response.status+')');
+    }
+    for(let offset=0;offset<removed.length;offset+=100){
+      const values=removed.slice(offset,offset+100).map(id=>/^\d+$/.test(id)?id:'"'+id.replace(/\\/g,'\\\\').replace(/"/g,'\\"')+'"').join(',');
+      const params=new URLSearchParams({[spec.pk]:'in.('+values+')'});
+      const response=await fetch(baseUrl()+spec.table+'?'+params.toString(),{method:'DELETE',headers:headers()});
+      if(!response.ok)throw new Error('Supabase delete failed for '+spec.table+' (HTTP '+response.status+')');
+    }
+    if(specs[key]) cloudRows.set(key,nextRows);
+    else cloudRows.set('__meta',[...oldRows.filter(row=>row.key!==key),{key,value}]);
   }
 
   async function flush(){
-    timer = null;
-    const pending = queue;
-    queue = new Map();
-    if(!pending.size) return;
+    timer=null;
+    const pending=queue;
+    queue=new Map();
+    if(!pending.size)return;
     try{
-      await pushRows(Array.from(pending.entries()));
+      for(const [key,value] of pending)await saveRows(key,value);
     }catch(error){
-      pending.forEach((value,key) => queue.set(key,value));
-      timer = setTimeout(flush, 5000);
-      console.error('Supabase sync failed; retrying', error);
+      pending.forEach((value,key)=>queue.set(key,value));
+      timer=setTimeout(flush,5000);
+      console.error('Supabase sync failed; retrying',error);
     }
   }
 
   function set(key,value){
     rawSet(key,value);
-    if(!ready) return;
+    if(!ready)return;
     queue.set(key,value);
-    if(!timer) timer = setTimeout(flush, 500);
+    if(!timer)timer=setTimeout(flush,500);
   }
 
-  function replaceLocalCache(rows){
-    const deviceActivated = DB.get('deviceActivated') === true;
+  function replaceLocalCache(snapshot){
+    const deviceActivated=DB.get('deviceActivated')===true;
     _sqlDb.run('DELETE FROM kv');
-    rows.forEach(row => {
-      _sqlDb.run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)', [row.key, JSON.stringify(row.value)]);
-    });
-    if(deviceActivated){
-      _sqlDb.run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)', ['deviceActivated', 'true']);
+    Object.entries(snapshot).forEach(([key,value])=>_sqlDb.run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)',[key,JSON.stringify(value)]));
+    if(deviceActivated&&!Object.prototype.hasOwnProperty.call(snapshot,'deviceActivated')){
+      _sqlDb.run('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)', ['deviceActivated','true']);
     }
     _saveDbToStorage();
   }
 
   async function init(){
-    if(!config.url || !config.key) throw new Error('Supabase URL or publishable key is missing in cloud-config.js');
-    try{syncCode = localStorage.getItem('cloudCode') || '';}catch(error){}
+    if(!config.url||!config.key)throw new Error('Supabase URL or publishable key is missing in cloud-config.js');
+    try{syncCode=localStorage.getItem('cloudCode')||'';}catch(error){}
     if(!syncCode){
-      syncCode = (prompt('Cloud Sync Code enter karein:') || '').trim();
-      if(!syncCode) throw new Error('Cloud Sync Code is required');
+      syncCode=(prompt('Cloud Sync Code enter karein:')||'').trim();
+      if(!syncCode)throw new Error('Cloud Sync Code is required');
       try{localStorage.setItem('cloudCode',syncCode);}catch(error){}
     }
-    const rows = await loadCloudRows();
-    if(!Array.isArray(rows) || rows.length === 0) throw new Error('Supabase has no library data in public.kv');
-    replaceLocalCache(rows);
-    DB.set = set;
-    ready = true;
+    const snapshot=await loadCloudSnapshot();
+    replaceLocalCache(snapshot);
+    DB.set=set;
+    ready=true;
   }
 
   return {init};
@@ -8101,7 +8207,7 @@ DB.onReady(async function() {
     await CloudSync.init();
   }catch(error){
     console.error('Cloud startup failed', error);
-    alert('Supabase se data load nahi ho saka. Connection, sync code, aur public.kv table check karein.');
+    alert('Supabase se data load nahi ho saka. Connection, sync code, aur relational tables migration check karein.');
     return;
   }
   initDB();
